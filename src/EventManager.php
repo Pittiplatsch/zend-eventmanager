@@ -10,6 +10,7 @@
 namespace Zend\EventManager;
 
 use ArrayObject;
+use Interop\Container\ContainerInterface;
 
 /**
  * Event manager: notification system
@@ -194,6 +195,51 @@ class EventManager implements EventManagerInterface
 
         $this->events[$eventName][(int) $priority][0][] = $listener;
         return $listener;
+    }
+
+    /**
+     * @todo Keep this as separate method? Integration with self::attach() pollutes its clean interface
+     * @todo "Copy" this functionality to \Zend\EventManager\SharedEventManager
+     */
+    public function attachDefinition($eventName, $listenerClass, $listenerMethod, ContainerInterface $container, array $env = [], $priority = 1)
+    {
+        if (! is_string($eventName)) {
+            throw new Exception\InvalidArgumentException(sprintf(
+                '%s expects a string for the event; received %s',
+                __METHOD__,
+                (is_object($eventName) ? get_class($eventName) : gettype($eventName))
+            ));
+        }
+
+        // Init variable which can be passed into temporary wrapper
+        $listener = null;
+
+        // Temporary wrapper which overrides itself with real listener on first call
+        $listener = function(Event $event) use (&$listener, $listenerClass, $listenerMethod, $container, $env) {
+            // Override this wrapper with final callable listener
+            $listener = [$this->fetchListener($listenerClass, $container, $env), $listenerMethod];
+            // Actually call listener on first call
+            $listener($event);
+        };
+
+        // Note REFERENCE to allow listener to override itself within listener registry
+        $this->events[$eventName][(int) $priority][0][] =& $listener;
+        return $listener;
+    }
+
+    /**
+     * @see \Zend\EventManager\LazyListener::fetchListener()
+     * @return callable
+     */
+    private function fetchListener($listener, ContainerInterface $container, array $env = [])
+    {
+        // In the future, typehint against Zend\ServiceManager\ServiceLocatorInterface,
+        // which defines this message starting in v3.
+        if (method_exists($container, 'build') && ! empty($env)) {
+            return $container->build($listener, $env);
+        }
+
+        return $container->get($listener);
     }
 
     /**
